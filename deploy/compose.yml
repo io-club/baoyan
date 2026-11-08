@@ -1,0 +1,399 @@
+name: baoyan
+
+networks:
+  default:
+    name: baoyan-appnet
+  agentnet:
+    name: baoyan-agentnet
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ${RUNTIME_DIR}/postgres:/var/lib/postgresql/data
+      - ../deploy/sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD}
+    volumes:
+      - ${RUNTIME_DIR}/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "127.0.0.1:25672:15672"
+    volumes:
+      - ${RUNTIME_DIR}/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: docker.m.daocloud.io/pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:19001:9001"
+    volumes:
+      - ${RUNTIME_DIR}/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  nacos:
+    image: nacos/nacos-server:v2.3.2
+    environment:
+      MODE: standalone
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:28848:8848"
+    volumes:
+      - ${RUNTIME_DIR}/nacos:/home/nacos/data
+      - ${RUNTIME_DIR}/nacos-logs:/home/nacos/logs
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8848/nacos/v1/console/health/readiness"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+    restart: unless-stopped
+
+  openhands:
+    image: ghcr.nju.edu.cn/openhands/agent-canvas:1.34.0
+    group_add:
+      - "${HOST_GID}"
+    environment:
+      LOCAL_BACKEND_API_KEY: ${OPENHANDS_LOCAL_BACKEND_API_KEY}
+      OH_SECRET_KEY: ${OPENHANDS_SECRET_KEY}
+      OH_CANVAS_SAFE_STATE_DIR: /home/openhands/.openhands
+      OH_DO_NOT_TRACK: "1"
+      TASK_API_URL: http://gateway:8080/api/tasks
+      TASK_ADMIN_PASSWORD: ${BAOYAN_ADMIN_PASSWORD}
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:18000:8000"
+    volumes:
+      - ${RUNTIME_DIR}/openhands:/home/openhands/.openhands
+      - ${RUNTIME_DIR}/workspace:/home/openhands/workspace
+      - ../docs:/home/openhands/workspace/api-docs:ro
+      - ${NPM_CACHE_DIR}:/home/openhands/.npm
+      - ${PIP_CACHE_DIR}:/home/openhands/.cache/pip
+    networks:
+      - agentnet
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsSL http://127.0.0.1:8000/ >/dev/null || exit 1"
+        ]
+      interval: 15s
+      timeout: 10s
+      start_period: 60s
+      retries: 30
+    restart: unless-stopped
+
+  napcat:
+    image: docker.1ms.run/mlikiowa/napcat-docker:v4.18.42
+    environment:
+      MODE: ws
+      WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN}
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:16099:6099"
+      - "127.0.0.1:13001:3001"
+    volumes:
+      - ${RUNTIME_DIR}/napcat/qq:/app/.config/QQ
+      - ${RUNTIME_DIR}/napcat/config:/app/napcat/config
+      - ${RUNTIME_DIR}/napcat/plugins:/app/napcat/plugins
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:6099/webui >/dev/null || exit 1"
+        ]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 30
+    restart: unless-stopped
+
+  xhs:
+    build:
+      context: ../services/xhs
+      dockerfile: Dockerfile
+    environment:
+      COOKIES: ""
+      TZ: Asia/Taipei
+    group_add:
+      - "${HOST_GID}"
+    ports:
+      - "127.0.0.1:15000:5000"
+    volumes:
+      - ${RUNTIME_DIR}/xhs/data:/app/datas
+      - ${PIP_CACHE_DIR}:/root/.cache/pip
+      - ${NPM_CACHE_DIR}:/root/.npm
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  task-api:
+    image: baoyan-tasks:local
+    build:
+      context: ../services/tasks
+      dockerfile: Dockerfile
+    group_add:
+      - "${HOST_GID}"
+    environment: &task-environment
+      TASK_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      TASK_RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+      TASK_ADMIN_PASSWORD: ${BAOYAN_ADMIN_PASSWORD}
+      TASK_LOG_DIR: /logs
+      TASK_WORK_DIR: /workspace
+      TASK_POLL_SECONDS: "3"
+      TASK_DEFAULT_TIMEZONE: Asia/Taipei
+      PLATFORM_API_URL: http://platform-api:8080
+      PLATFORM_ADMIN_PASSWORD: ${BAOYAN_ADMIN_PASSWORD}
+      XHS_API_URL: http://xhs:5000
+      PIP_CACHE_DIR: /home/task/.cache/pip
+      NPM_CONFIG_CACHE: /home/task/.npm
+      MAVEN_CONFIG: /home/task/.m2
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:18010:8080"
+    volumes:
+      - ${RUNTIME_DIR}/tasks/logs:/logs
+      - ${RUNTIME_DIR}/workspace:/workspace
+      - ${PIP_CACHE_DIR}:/home/task/.cache/pip
+      - ${NPM_CACHE_DIR}:/home/task/.npm
+      - ${M2_CACHE_DIR}:/home/task/.m2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  task-worker:
+    image: baoyan-tasks:local
+    pull_policy: never
+    group_add:
+      - "${HOST_GID}"
+    command: ["dramatiq", "app.actors", "--processes", "2", "--threads", "4"]
+    environment: *task-environment
+    volumes:
+      - ${RUNTIME_DIR}/tasks/logs:/logs
+      - ${RUNTIME_DIR}/workspace:/workspace
+      - ${PIP_CACHE_DIR}:/home/task/.cache/pip
+      - ${NPM_CACHE_DIR}:/home/task/.npm
+      - ${M2_CACHE_DIR}:/home/task/.m2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  task-scheduler:
+    image: baoyan-tasks:local
+    pull_policy: never
+    group_add:
+      - "${HOST_GID}"
+    command: ["python", "-m", "app.scheduler"]
+    environment: *task-environment
+    volumes:
+      - ${RUNTIME_DIR}/tasks/logs:/logs
+      - ${RUNTIME_DIR}/workspace:/workspace
+      - ${PIP_CACHE_DIR}:/home/task/.cache/pip
+      - ${NPM_CACHE_DIR}:/home/task/.npm
+      - ${M2_CACHE_DIR}:/home/task/.m2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  task-supervisor:
+    image: baoyan-tasks:local
+    pull_policy: never
+    group_add:
+      - "${HOST_GID}"
+    command: ["python", "-m", "app.supervisor"]
+    environment: *task-environment
+    volumes:
+      - ${RUNTIME_DIR}/tasks/logs:/logs
+      - ${RUNTIME_DIR}/workspace:/workspace
+      - ${PIP_CACHE_DIR}:/home/task/.cache/pip
+      - ${NPM_CACHE_DIR}:/home/task/.npm
+      - ${M2_CACHE_DIR}:/home/task/.m2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  task-test:
+    image: baoyan-tasks:local
+    pull_policy: never
+    profiles: ["test"]
+    command: ["pytest", "-q"]
+    environment: *task-environment
+    volumes:
+      - ${PIP_CACHE_DIR}:/home/task/.cache/pip
+      - ${NPM_CACHE_DIR}:/home/task/.npm
+      - ${M2_CACHE_DIR}:/home/task/.m2
+
+  platform-api:
+    image: baoyan-platform-api:local
+    pull_policy: never
+    build:
+      context: ../services/platform
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NACOS_URL: http://nacos:8848/nacos
+      NACOS_GROUP: BAOYAN_GROUP
+      NACOS_DATA_ID: baoyan-platform.yaml
+      TASK_API_URL: http://task-api:8080
+      XHS_API_URL: http://xhs:5000
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      TZ: Asia/Taipei
+    ports:
+      - "127.0.0.1:18020:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nacos:
+        condition: service_healthy
+      task-api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  gateway:
+    image: baoyan-gateway:local
+    pull_policy: never
+    build:
+      context: ../services/gateway
+      dockerfile: Dockerfile
+    environment:
+      SERVER_PORT: "8080"
+      NACOS_ADDR: nacos:8848
+      NACOS_ENABLED: "true"
+      TASK_API_URI: http://task-api:8080
+      TZ: Asia/Taipei
+    expose:
+      - "8080"
+    depends_on:
+      nacos:
+        condition: service_healthy
+      task-api:
+        condition: service_healthy
+    networks:
+      - default
+      - agentnet
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:8080/actuator/health || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  web:
+    image: baoyan-web:local
+    pull_policy: never
+    build:
+      context: ../services/web
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:18080:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+      platform-api:
+        condition: service_healthy
+    networks:
+      - default
+      - agentnet
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+

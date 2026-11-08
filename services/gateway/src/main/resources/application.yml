@@ -1,0 +1,60 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: baoyan-gateway
+  config:
+    import:
+      - optional:nacos:baoyan-platform.yaml?group=BAOYAN_GROUP
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_ADDR:nacos:8848}
+        enabled: ${NACOS_ENABLED:true}
+      config:
+        server-addr: ${NACOS_ADDR:nacos:8848}
+        import-check:
+          enabled: false
+    gateway:
+      routes:
+        - id: tasks-local
+          uri: ${TASK_API_URI:http://task-api:8080}
+          predicates:
+            - Path=/api/tasks,/api/tasks/**
+          filters:
+            - 'RewritePath=/api/tasks(?<segment>/?.*), /v1/tasks${segment}'
+        - id: platform-local
+          uri: ${PLATFORM_API_URI:http://platform-api:8080}
+          predicates:
+            - Path=/api/platform,/api/platform/**
+          filters:
+            - 'RewritePath=/api/platform(?<segment>/?.*), /v1${segment}'
+        - id: xhs-local
+          uri: ${XHS_API_URI:http://xhs:5000}
+          predicates:
+            - Path=/api/xhs,/api/xhs/**
+          filters:
+            - 'RewritePath=/api/xhs(?<segment>/?.*), /v1${segment}'
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOriginPatterns: "*"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+            allowCredentials: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    org.springframework.cloud.gateway: info
+    com.alibaba.nacos: warn
+

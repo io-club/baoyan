@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>保研平台</title>
+    <link rel="stylesheet" href="/console.css?v=3" />
+    <link rel="stylesheet" href="/calendar.css?v=2" />
+  </head>
+  <body>
+    <div id="login" class="login">
+      <form id="login-form">
+        <span class="brand-mark" aria-hidden="true">研</span>
+
+        <h1>保研平台</h1>
+        <p>整理申请信息、导师资料与保研计划。</p>
+        <label for="password">访问口令</label>
+        <input id="password" type="password" placeholder="口令" autocomplete="current-password" required />
+        <button type="submit">进入工作台 <span aria-hidden="true">→</span></button>
+        <div id="login-error" class="error"></div>
+      </form>
+    </div>
+    <div id="app" hidden><div id="shell"></div></div>
+    <dialog id="editor"><form id="editor-form"><div class="dialog-head"><h2 id="editor-title"></h2><button type="button" class="secondary" id="editor-close">关闭</button></div><div id="editor-fields"></div><p id="editor-error" class="error" role="alert"></p><div class="actions"><button type="submit" id="editor-save">保存</button></div></form></dialog>
+    <div id="toast" role="status" hidden></div>
+    <script type="module" src="/ui-shell.js?v=4"></script>
+  </body>
+</html>
+
